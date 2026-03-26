@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-'''ICT Automated Trading Bot - Kill Zone Scalper Strategy'''
-
+'''ICT Automated Trading Bot - Milestone 5: Paper Trading Integration'''
 import time
-import requests
 import pandas as pd
 from datetime import datetime
 from bybit_connector import BybitConnector
@@ -10,39 +8,20 @@ from bybit_config import BYBIT_TESTNET_API_KEY, BYBIT_TESTNET_API_SECRET
 
 # Kill Zone windows (UTC)
 KILL_ZONES = [
-    {"name": "London Open",   "start": 7,  "end": 10},
-    {"name": "NY Open",       "start": 13, "end": 16},
-    {"name": "London Close",  "start": 15, "end": 17},
+    {"name": "London Open", "start": 7, "end": 10},
+    {"name": "NY Open", "start": 13, "end": 16},
+    {"name": "London Close", "start": 15, "end": 17},
 ]
 
-def fetch_ohlcv(symbol="BTCUSDT", interval="5", limit=200):
-    url = "https://api.bybit.com/v5/market/kline"
-    params = {"category": "linear", "symbol": symbol,
-              "interval": interval, "limit": limit}
-    try:
-        r = requests.get(url, params=params, timeout=10)
-        data = r.json()
-        candles = data.get("result", {}).get("list", [])
-        if not candles:
-            return None
-        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
-        for col in ['timestamp', 'open', 'high', 'low', 'close']:
-            df[col] = pd.to_numeric(df[col])
-        df = df.sort_values('timestamp').reset_index(drop=True)
-        return df
-    except Exception as e:
-        print(f"Data fetch error: {e}")
-        return None
-
-
 class KillZoneScalperBot:
-    '''ICT Kill Zone Scalper - Refined Strategy'''
-
+    '''ICT Kill Zone Scalper - Automated Paper Trading Version'''
     def __init__(self, api_key, api_secret, testnet=True):
         self.bybit = BybitConnector(api_key, api_secret, testnet)
         self.running = False
         self.check_interval = 60
         self.trade_log = []
+        self.risk_pct = 0.025 # 2.5% risk per trade
+        self.rr_ratio = 2.0   # 2:1 Reward-to-Risk
 
     def is_kill_zone(self):
         now = datetime.utcnow()
@@ -65,90 +44,158 @@ class KillZoneScalperBot:
     def detect_fvg(self, df, min_pct=0.01):
         fvgs = []
         for i in range(2, len(df)):
-            gap_size_bull = (df.iloc[i-2]['low'] - df.iloc[i]['high']) / df.iloc[i]['close'] * 100
-            if gap_size_bull >= min_pct:
-                fvgs.append({'type': 'bullish', 'top': df.iloc[i-2]['low'],
-                              'bottom': df.iloc[i]['high'], 'idx': i})
-            gap_size_bear = (df.iloc[i]['low'] - df.iloc[i-2]['high']) / df.iloc[i]['close'] * 100
-            if gap_size_bear >= min_pct:
-                fvgs.append({'type': 'bearish', 'top': df.iloc[i]['low'],
-                              'bottom': df.iloc[i-2]['high'], 'idx': i})
+            # Bullish FVG: Candle 1 Low > Candle 3 High
+            if df.iloc[i-2]['low'] > df.iloc[i]['high']:
+                gap_size = (df.iloc[i-2]['low'] - df.iloc[i]['high']) / df.iloc[i]['close'] * 100
+                if gap_size >= min_pct:
+                    fvgs.append({
+                        'type': 'bullish', 
+                        'top': df.iloc[i-2]['low'],
+                        'bottom': df.iloc[i]['high'], 
+                        'idx': i
+                    })
+            # Bearish FVG: Candle 1 High < Candle 3 Low
+            elif df.iloc[i-2]['high'] < df.iloc[i]['low']:
+                gap_size = (df.iloc[i]['low'] - df.iloc[i-2]['high']) / df.iloc[i]['close'] * 100
+                if gap_size >= min_pct:
+                    fvgs.append({
+                        'type': 'bearish', 
+                        'top': df.iloc[i]['low'],
+                        'bottom': df.iloc[i-2]['high'], 
+                        'idx': i
+                    })
         return fvgs
 
-    def analyze_market(self):
-        print(f"\n{' '*2}{'=' * 68}")
-        print(f"  {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
-        print(f"  {'=' * 68}")
+    def calculate_position_size(self, price, stop_loss):
+        """Calculate quantity based on account balance and risk %"""
+        try:
+            balance_data = self.bybit.get_balance()
+            # Assuming Unified account, looking for USDT equity
+            usdt_balance = float(balance_data['total'].get('USDT', 0))
+            if usdt_balance <= 0:
+                return 0
+            
+            risk_amount = usdt_balance * self.risk_pct
+            price_risk = abs(price - stop_loss)
+            
+            if price_risk == 0:
+                return 0
+                
+            qty = risk_amount / price_risk
+            # BTC precision is usually 3 decimals on Bybit
+            return round(qty, 3)
+        except Exception as e:
+            print(f"Error calculating size: {e}")
+            return 0
 
+    def execute_trade(self, signal, price, fvg):
+        """Execute market order with SL and TP"""
+        print(f"🚀 Executing {signal.upper()} trade...")
+        
+        # SL logic: Just outside the FVG
+        if signal == 'long':
+            sl = fvg['bottom'] * 0.999 # Slight buffer
+            tp = price + (price - sl) * self.rr_ratio
+            side = 'buy'
+        else:
+            sl = fvg['top'] * 1.001
+            tp = price - (sl - price) * self.rr_ratio
+            side = 'sell'
+            
+        qty = self.calculate_position_size(price, sl)
+        if qty <= 0:
+            print("❌ Invalid quantity (check balance/risk)")
+            return
+            
+        print(f" 📊 Qty: {qty} | SL: {sl:,.2f} | TP: {tp:,.2f}")
+        
+        order = self.bybit.place_market_order('BTC/USDT:USDT', side, qty)
+        
+        if order:
+            trade_info = {
+                'timestamp': datetime.utcnow(),
+                'symbol': 'BTC/USDT',
+                'side': side,
+                'entry': price,
+                'qty': qty,
+                'sl': sl,
+                'tp': tp,
+                'status': 'open'
+            }
+            self.trade_log.append(trade_info)
+            print(f"✅ Trade successfully placed and logged.")
+        else:
+            print("❌ Failed to place order.")
+
+    def analyze_market(self):
+        print(f"
+  {'=' * 68}")
+        print(f"   {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        print(f"  {'=' * 68}")
+        
         in_kz, kz_name = self.is_kill_zone()
         if not in_kz:
-            print("  Outside Kill Zone - standby")
-            return None, None
-        print(f"  Kill Zone: {kz_name}")
+            print(" Outside Kill Zone - standby")
+            return None, None, None
 
-        df_1h = fetch_ohlcv(interval="60", limit=10)
+        print(f" Kill Zone: {kz_name}")
+        
+        # Use BybitConnector for data
+        df_1h = self.bybit.get_ohlcv(symbol='BTC/USDT:USDT', timeframe='1h', limit=10)
         trend = self.get_trend(df_1h)
-        print(f"  1H Trend: {trend.upper()}")
+        print(f" 1H Trend: {trend.upper()}")
+        
         if trend == "neutral":
-            print("  Neutral trend - no trade")
-            return None, None
+            print(" Neutral trend - no trade")
+            return None, None, None
 
-        df_5m = fetch_ohlcv(interval="5", limit=200)
+        df_5m = self.bybit.get_ohlcv(symbol='BTC/USDT:USDT', timeframe='5m', limit=200)
         if df_5m is None:
-            print("  Failed to fetch 5m data")
-            return None, None
+            print(" Failed to fetch 5m data")
+            return None, None, None
 
-        price = df_5m.iloc[-1]['close']
-        print(f"  BTC Price: ${price:,.2f}")
-
+        price = self.bybit.get_price(symbol='BTC/USDT:USDT')
+        print(f" BTC Price: ${price:,.2f}")
+        
         fvgs = self.detect_fvg(df_5m)
         recent_fvgs = [f for f in fvgs if len(df_5m) - f['idx'] <= 3]
-        print(f"  Recent FVGs (last 3 candles): {len(recent_fvgs)}")
-
+        
         for fvg in recent_fvgs:
             if trend == "bullish" and fvg['type'] == 'bullish':
                 if fvg['bottom'] <= price <= fvg['top']:
-                    print(f"  LONG SIGNAL in Kill Zone {kz_name}")
-                    print(f"    Entry: ${price:,.2f}  Zone: ${fvg['bottom']:,.2f}-${fvg['top']:,.2f}")
-                    return 'long', fvg
+                    print(f" LONG SIGNAL in Kill Zone {kz_name}")
+                    return 'long', price, fvg
+                    
             if trend == "bearish" and fvg['type'] == 'bearish':
                 if fvg['bottom'] <= price <= fvg['top']:
-                    print(f"  SHORT SIGNAL in Kill Zone {kz_name}")
-                    print(f"    Entry: ${price:,.2f}  Zone: ${fvg['bottom']:,.2f}-${fvg['top']:,.2f}")
-                    return 'short', fvg
-
-        print("  No aligned setups")
-        return None, None
+                    print(f" SHORT SIGNAL in Kill Zone {kz_name}")
+                    return 'short', price, fvg
+                    
+        print(" No aligned setups")
+        return None, None, None
 
     def run(self, iterations=None):
-        print("\n" + "="*70)
-        print("  ICT Kill Zone Scalper - STARTED")
+        print("
+" + "="*70)
+        print(" ICT Kill Zone Scalper - MILESTONE 5 (Paper Trading)")
         print("="*70)
-        print(f"  Symbol:    BTC/USDT (5m exec / 1H trend)")
-        print(f"  Kill Zones: London Open, NY Open, London Close")
-        print(f"  Mode:      TESTNET")
-        print("="*70)
-
         self.running = True
         count = 0
         try:
             while self.running:
                 count += 1
-                if iterations and count > iterations:
-                    break
-                signal, data = self.analyze_market()
+                if iterations and count > iterations: break
+                
+                signal, price, fvg_data = self.analyze_market()
                 if signal:
-                    print(f"\n  Trade signal detected: {signal.upper()}")
-                    print("  (Manual execution required for safety)")
+                    self.execute_trade(signal, price, fvg_data)
+                
                 if self.running and (not iterations or count < iterations):
-                    print(f"\n  Sleeping {self.check_interval}s...")
                     time.sleep(self.check_interval)
         except KeyboardInterrupt:
             self.running = False
-            print("\nBot stopped.")
-
-        print("\nBot shutdown complete.")
-
+        print("
+Bot shutdown complete.")
 
 if __name__ == "__main__":
     bot = KillZoneScalperBot(
