@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import sqlite3
 from datetime import datetime, timedelta
 from telegram import Update, BotCommand
@@ -22,22 +21,19 @@ def set_bot_instance(bot):
 
 bybit = BybitConnector(BYBIT_TESTNET_API_KEY, BYBIT_TESTNET_API_SECRET, testnet=True)
 
-@auth
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    menu = ("🤖 *ICT Bot Control Panel*\n\n"
-            "/status    — Is the bot running?\n"
-            "/balance   — Current account balance\n"
-            "/trades    — Open positions right now\n"
-            "/log       — Trade log (last 24 hours)\n"
-            "/price     — Current BTC price\n"
-            "/help      — Show this menu")
+    menu = ("*ICT Bot Control Panel*\n\n"
+            "/status    - Is the bot running?\n"
+            "/balance   - Current account balance\n"
+            "/trades    - Open positions right now\n"
+            "/log       - Trade log (last 24 hours)\n"
+            "/price     - Current BTC price\n"
+            "/help      - Show this menu")
     await update.message.reply_text(menu, parse_mode='Markdown')
 
-@auth
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await cmd_start(update, ctx)
 
-@auth
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     if _bot_instance is not None:
@@ -45,7 +41,7 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         dd_hit = _bot_instance.daily_limit_hit
         daily_pnl = _bot_instance.daily_realized_pnl
         open_trades = sum(1 for t in _bot_instance.trade_log if t.get('status') == 'open')
-        msg = (f"{'OK' if running else 'STOPPED'} *Bot Status*\n"
+        msg = (f"*Bot Status*\n"
                f"Running: {'YES' if running else 'NO'}\n"
                f"Open trades: {open_trades}\n"
                f"Daily drawdown: {'HIT' if dd_hit else 'OK'}\n"
@@ -56,11 +52,13 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             conn_ok = price is not None
         except Exception:
             conn_ok = False
-        msg = (f"*Bot Status*\nQuery bot: Running\nTrading loop: Not attached\n"
-               f"Bybit connectivity: {'OK' if conn_ok else 'FAILED'}\n{now_utc}")
+        msg = (f"*Bot Status*\n"
+               f"Query bot: Running\n"
+               f"Trading loop: Not attached\n"
+               f"Bybit connectivity: {'OK' if conn_ok else 'FAILED'}\n"
+               f"{now_utc}")
     await update.message.reply_text(msg, parse_mode='Markdown')
 
-@auth
 async def cmd_balance(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Fetching balance...")
     try:
@@ -73,16 +71,14 @@ async def cmd_balance(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         msg = f"Failed to fetch balance: {e}"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
-@auth
 async def cmd_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         price = bybit.get_price()
-        msg = f"*BTC/USDT* ${price:,.2f}"
+        msg = f"*BTC/USDT* ${price:,.2f}" if price else "Could not fetch price"
     except Exception as e:
         msg = f"Price fetch failed: {e}"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
-@auth
 async def cmd_trades(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if _bot_instance is not None:
         open_trades = [t for t in _bot_instance.trade_log if t.get('status') == 'open']
@@ -109,7 +105,6 @@ async def cmd_trades(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Failed to fetch positions: {e}")
 
-@auth
 async def cmd_log(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     cutoff = datetime.utcnow() - timedelta(hours=24)
     if _bot_instance is not None and _bot_instance.trade_log:
@@ -143,3 +138,18 @@ async def cmd_log(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("\n".join(lines))
     except Exception as e:
         await update.message.reply_text(f"Could not read trade journal: {e}")
+
+def main():
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start",   cmd_start))
+    app.add_handler(CommandHandler("help",    cmd_help))
+    app.add_handler(CommandHandler("status",  cmd_status))
+    app.add_handler(CommandHandler("balance", cmd_balance))
+    app.add_handler(CommandHandler("price",   cmd_price))
+    app.add_handler(CommandHandler("trades",  cmd_trades))
+    app.add_handler(CommandHandler("log",     cmd_log))
+    print("Telegram Query Bot running. Send /start to begin.")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == '__main__':
+    main()
