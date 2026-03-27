@@ -1,0 +1,19 @@
+# fly.toml - Fly.io configuration for ICT Trading Bot
+app = 'ict-trading-bot'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+# This is a background worker - no HTTP server needed
+[checks]
+  [checks.alive]
+    type = 'command'
+    command = ['python', '-c', 'import sys; sys.exit(0)']
+    interval = '30s'
+    timeout = '5s'
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1
