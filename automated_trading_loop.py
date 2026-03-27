@@ -4,7 +4,7 @@ import time
 import pandas as pd
 from datetime import datetime, date
 from bybit_connector import BybitConnector
-from bybit_config import BYBIT_TESTNET_API_KEY, BYBIT_TESTNET_API_SECRET
+import os
 
 # Kill Zone windows (UTC)
 KILL_ZONES = [
@@ -255,8 +255,8 @@ class KillZoneScalperBot:
 
 if __name__ == "__main__":
     bot = KillZoneScalperBot(
-        api_key=BYBIT_TESTNET_API_KEY,
-        api_secret=BYBIT_TESTNET_API_SECRET,
+                api_key=os.environ.get('BYBIT_API_KEY', ''),
+                api_secret=os.environ.get('BYBIT_API_SECRET', ''),
         testnet=True
     )
-    bot.run(iterations=3)
+    bot.run()
