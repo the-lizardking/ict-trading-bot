@@ -1,0 +1,22 @@
+# Don't copy secrets or credentials into Docker image
+.env
+bybit_config.py
+
+# Don't copy test files, HTML charts, or dev tools
+tests/
+*.html
+test_*.py
+*.py.save
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Data files (not needed at runtime)
+data/
+trade_journal.db
+
+# Git
+.git
+.gitignore
