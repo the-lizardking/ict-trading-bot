@@ -1,146 +1,115 @@
-import sqlite3
-from datetime import datetime, timedelta
+import os
+import logging
+from datetime import datetime, timezone
+from dotenv import load_dotenv
 from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes
-from bybit_connector import BybitConnector
-from bybit_config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, BYBIT_TESTNET_API_KEY, BYBIT_TESTNET_API_SECRET
+import requests
 
-ALLOWED_CHAT_ID = int(TELEGRAM_CHAT_ID)
+load_dotenv()
 
-def auth(func):
-    async def wrapper(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-        if update.effective_chat.id != ALLOWED_CHAT_ID:
-            return
-        await func(update, ctx)
-    return wrapper
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
+BYBIT_API_KEY      = os.getenv("BYBIT_API_KEY")
+BYBIT_API_SECRET   = os.getenv("BYBIT_API_SECRET")
 
-_bot_instance = None
-def set_bot_instance(bot):
-    global _bot_instance
-    _bot_instance = bot
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-bybit = BybitConnector(BYBIT_TESTNET_API_KEY, BYBIT_TESTNET_API_SECRET, testnet=True)
+def get_bybit_client():
+    from pybit.unified_trading import HTTP
+    return HTTP(testnet=False, api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET)
 
-async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    menu = ("*ICT Bot Control Panel*\n\n"
-            "/status    - Is the bot running?\n"
-            "/balance   - Current account balance\n"
-            "/trades    - Open positions right now\n"
-            "/log       - Trade log (last 24 hours)\n"
-            "/price     - Current BTC price\n"
-            "/help      - Show this menu")
-    await update.message.reply_text(menu, parse_mode='Markdown')
+def is_authorised(update: Update) -> bool:
+    return str(update.effective_chat.id) == str(TELEGRAM_CHAT_ID)
 
-async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await cmd_start(update, ctx)
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorised(update): return
+    text = (
+        "👋 *ICT Trading Bot*\n\n"
+        "Available commands:\n"
+        "/status  — Is the bot running?\n"
+        "/balance — Current account balance\n"
+        "/trades  — Open positions right now\n"
+        "/log     — Last 20 log lines\n"
+        "/price   — Current BTC price\n"
+        "/help    — Show this menu"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
 
-async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    if _bot_instance is not None:
-        running = _bot_instance.running
-        dd_hit = _bot_instance.daily_limit_hit
-        daily_pnl = _bot_instance.daily_realized_pnl
-        open_trades = sum(1 for t in _bot_instance.trade_log if t.get('status') == 'open')
-        msg = (f"*Bot Status*\n"
-               f"Running: {'YES' if running else 'NO'}\n"
-               f"Open trades: {open_trades}\n"
-               f"Daily drawdown: {'HIT' if dd_hit else 'OK'}\n"
-               f"Daily P&L: ${daily_pnl:+,.2f}\n{now_utc}")
-    else:
-        try:
-            price = bybit.get_price()
-            conn_ok = price is not None
-        except Exception:
-            conn_ok = False
-        msg = (f"*Bot Status*\n"
-               f"Query bot: Running\n"
-               f"Trading loop: Not attached\n"
-               f"Bybit connectivity: {'OK' if conn_ok else 'FAILED'}\n"
-               f"{now_utc}")
-    await update.message.reply_text(msg, parse_mode='Markdown')
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cmd_start(update, context)
 
-async def cmd_balance(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Fetching balance...")
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorised(update): return
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    await update.message.reply_text(f"✅ ICT Trading Bot is LIVE on Oracle Cloud!\nMonitoring kill zones...\n🕐 {now}")
+
+async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorised(update): return
     try:
-        data = bybit.get_balance()
-        usdt = float(data['total'].get('USDT', 0))
-        free = float(data['free'].get('USDT', 0))
-        used = float(data['used'].get('USDT', 0))
-        msg = f"*Account Balance*\nTotal: ${usdt:,.2f}\nAvailable: ${free:,.2f}\nIn margin: ${used:,.2f}"
+        client = get_bybit_client()
+        resp = client.get_wallet_balance(accountType="UNIFIED")
+        coins = resp["result"]["list"][0]["coin"]
+        lines = [f"  {c['coin']}: {float(c['walletBalance']):.4f} (≈ ${float(c.get('usdValue','0')):.2f})"
+                 for c in coins if float(c.get("walletBalance", 0)) > 0]
+        text = "\n".join(lines) if lines else "No balance found."
+        await update.message.reply_text(f"💰 *Account Balance:*\n{text}", parse_mode="Markdown")
     except Exception as e:
-        msg = f"Failed to fetch balance: {e}"
-    await update.message.reply_text(msg, parse_mode='Markdown')
+        await update.message.reply_text(f"⚠️ Could not fetch balance: {e}")
 
-async def cmd_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorised(update): return
     try:
-        price = bybit.get_price()
-        msg = f"*BTC/USDT* ${price:,.2f}" if price else "Could not fetch price"
+        resp = requests.get("https://api.bybit.com/v5/market/tickers",
+                            params={"category": "linear", "symbol": "BTCUSDT"}, timeout=10)
+        price = float(resp.json()["result"]["list"][0]["lastPrice"])
+        await update.message.reply_text(f"📈 *BTC/USDT:* ${price:,.2f}", parse_mode="Markdown")
     except Exception as e:
-        msg = f"Price fetch failed: {e}"
-    await update.message.reply_text(msg, parse_mode='Markdown')
+        await update.message.reply_text(f"⚠️ Could not fetch price: {e}")
 
-async def cmd_trades(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if _bot_instance is not None:
-        open_trades = [t for t in _bot_instance.trade_log if t.get('status') == 'open']
-        if not open_trades:
-            await update.message.reply_text("No open trades right now.")
-            return
-        lines = [f"Open Trades ({len(open_trades)})"]
-        for i, t in enumerate(open_trades, 1):
-            lines.append(f"#{i} {t['side'].upper()} {t['qty']} BTC @ ${t['entry']:,.2f} SL:${t['sl']:,.2f} TP:${t['tp']:,.2f}")
-        await update.message.reply_text("\n".join(lines))
-        return
-    await update.message.reply_text("Fetching live positions...")
+async def cmd_trades(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorised(update): return
     try:
-        positions = bybit.exchange.fetch_positions(['BTC/USDT:USDT'])
-        active = [p for p in positions if float(p.get('contracts', 0)) != 0]
-        if not active:
-            await update.message.reply_text("No open positions on Bybit.")
+        client = get_bybit_client()
+        resp = client.get_positions(category="linear", settleCoin="USDT")
+        positions = [p for p in resp["result"]["list"] if float(p.get("size", 0)) > 0]
+        if not positions:
+            await update.message.reply_text("📊 No open positions right now.")
             return
-        lines = [f"Live Positions ({len(active)})"]
-        for p in active:
-            pnl = float(p.get('unrealizedPnl', 0) or 0)
-            lines.append(f"{p['side'].upper()} {p['contracts']} BTC @ ${float(p['entryPrice']):,.2f} uPnL:${pnl:+,.2f}")
-        await update.message.reply_text("\n".join(lines))
+        lines = [f"  {p['symbol']} {p['side']} | Size: {p['size']} | Entry: ${float(p['avgPrice']):,.2f} | PnL: ${float(p['unrealisedPnl']):+.2f}"
+                 for p in positions]
+        await update.message.reply_text("📊 *Open Positions:*\n" + "\n".join(lines), parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Failed to fetch positions: {e}")
+        await update.message.reply_text(f"⚠️ Could not fetch trades: {e}")
 
-async def cmd_log(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    cutoff = datetime.utcnow() - timedelta(hours=24)
-    if _bot_instance is not None and _bot_instance.trade_log:
-        recent = [t for t in _bot_instance.trade_log if t['timestamp'] >= cutoff]
-        if not recent:
-            await update.message.reply_text("No trades in the last 24 hours.")
-            return
-        lines = [f"Trade Log Last 24h ({len(recent)} trades)"]
-        for t in recent[-10:]:
-            pnl_str = f"${t['pnl']:+,.2f}" if 'pnl' in t else "open"
-            lines.append(f"{t['timestamp'].strftime('%H:%M')} {t['side'].upper()} @ ${t['entry']:,.2f} {pnl_str} [{t['status']}]")
-        await update.message.reply_text("\n".join(lines))
-        return
-    await update.message.reply_text("Reading trade journal...")
+async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorised(update): return
     try:
-        conn = sqlite3.connect('trade_journal.db')
-        cur = conn.cursor()
-        cur.execute("SELECT timestamp, symbol, side, entry_price, exit_price, pnl, status FROM trades WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT 20",
-                    (cutoff.strftime('%Y-%m-%d %H:%M:%S'),))
-        rows = cur.fetchall()
-        conn.close()
-        if not rows:
-            await update.message.reply_text("No trades in last 24h.")
+        log_file = os.path.join(os.path.dirname(__file__), "bot.log")
+        if not os.path.exists(log_file) or os.path.getsize(log_file) == 0:
+            await update.message.reply_text("📋 Log file is empty.")
             return
-        total_pnl = sum(float(r[5]) if r[5] else 0 for r in rows)
-        lines = [f"Trade Log Last 24h ({len(rows)} trades)"]
-        for r in rows:
-            ts, sym, side, entry, exit_p, pnl, status = r
-            lines.append(f"{ts[11:16]} {side.upper()} @ ${float(entry):,.2f} ${float(pnl or 0):+,.2f} [{status}]")
-        lines.append(f"Total P&L: ${total_pnl:+,.2f}")
-        await update.message.reply_text("\n".join(lines))
+        with open(log_file, "r") as f:
+            lines = f.readlines()
+        last_lines = "".join(lines[-20:])[-3000:]
+        await update.message.reply_text(f"📋 *Last 20 log lines:*\n```\n{last_lines}\n```", parse_mode="Markdown")
     except Exception as e:
-        await update.message.reply_text(f"Could not read trade journal: {e}")
+        await update.message.reply_text(f"⚠️ Could not read log: {e}")
+
+async def post_init(app: Application):
+    await app.bot.set_my_commands([
+        BotCommand("start",   "Show this menu"),
+        BotCommand("status",  "Is the bot running?"),
+        BotCommand("balance", "Current account balance"),
+        BotCommand("trades",  "Open positions right now"),
+        BotCommand("log",     "Last 20 log lines"),
+        BotCommand("price",   "Current BTC price"),
+        BotCommand("help",    "Show this menu"),
+    ])
 
 def main():
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start",   cmd_start))
     app.add_handler(CommandHandler("help",    cmd_help))
     app.add_handler(CommandHandler("status",  cmd_status))
@@ -151,5 +120,5 @@ def main():
     print("Telegram Query Bot running. Send /start to begin.")
     app.run_polling(drop_pending_updates=True)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

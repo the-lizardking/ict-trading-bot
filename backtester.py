@@ -4,7 +4,6 @@ import json
 import os
 from datetime import datetime
 from typing import Optional, List, Dict
-
 DEFAULT_CONFIG = {
     "initial_capital": 10000.0,
     "risk_per_trade_pct": 1.0,
@@ -21,8 +20,6 @@ DEFAULT_CONFIG = {
     "maker_fee_pct": 0.02,
     "slippage_pct": 0.02,
 }
-
-
 class ICTBacktester:
     def __init__(self, df, config=None):
         self.df = df.copy().reset_index(drop=True)
@@ -30,7 +27,6 @@ class ICTBacktester:
         self.trades = []
         self.capital = self.cfg["initial_capital"]
         self.equity_curve = [self.capital]
-
     def detect_swing_highs_lows(self):
         lb = self.cfg["swing_lookback"]
         df = self.df
@@ -41,7 +37,6 @@ class ICTBacktester:
             if df["low"].iloc[i] == df["low"].iloc[i-lb:i+lb+1].min():
                 sl.append(i)
         return sh, sl
-
     def detect_fvgs(self):
         df = self.df
         min_sz = self.cfg["min_fvg_size_pct"] / 100
@@ -60,7 +55,6 @@ class ICTBacktester:
                         "top": df["low"].iloc[i-2], "bottom": df["high"].iloc[i],
                         "filled": False, "ts": df["timestamp"].iloc[i]})
         return fvgs
-
     def detect_order_blocks(self, swing_highs, swing_lows):
         df = self.df
         lb = self.cfg["ob_lookback"]
@@ -78,7 +72,6 @@ class ICTBacktester:
                         "top": df["high"].iloc[i], "bottom": df["close"].iloc[i]})
                     break
         return obs
-
     def market_structure(self, sh, sl):
         df = self.df
         if len(sh) < 2 or len(sl) < 2:
@@ -94,17 +87,14 @@ class ICTBacktester:
         if lh and ll:
             return "bearish"
         return "ranging"
-
     def in_session(self, ts):
         if isinstance(ts, (int, float)):
             ts = datetime.utcfromtimestamp(ts / 1000)
         return self.cfg["session_start_hour"] <= ts.hour < self.cfg["session_end_hour"]
-
     def fmt_ts(self, ts):
         if isinstance(ts, (int, float)):
             return datetime.utcfromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M")
         return str(ts)[:16]
-
     def simulate_trade(self, signal, capital):
         df = self.df
         cfg = self.cfg
@@ -113,7 +103,6 @@ class ICTBacktester:
         entry = signal["entry_price"]
         lb = cfg["swing_lookback"] * 2
         buf = entry * cfg["sl_buffer_pct"] / 100
-
         if direction == "long":
             lows = df["low"].iloc[max(0, i-lb):i]
             sl = (lows.min() if len(lows) > 0 else entry * 0.99) - buf
@@ -122,21 +111,17 @@ class ICTBacktester:
             highs = df["high"].iloc[max(0, i-lb):i]
             sl = (highs.max() if len(highs) > 0 else entry * 1.01) + buf
             tp = entry - (sl - entry) * cfg["reward_to_risk"]
-
         sl_dist = abs(entry - sl)
         if sl_dist < entry * 0.0005:
             return None
-
         risk_amt = capital * cfg["risk_per_trade_pct"] / 100
         size = risk_amt / sl_dist
         slip = entry * cfg["slippage_pct"] / 100
         act_entry = entry + (slip if direction == "long" else -slip)
         entry_fee = act_entry * size * cfg["taker_fee_pct"] / 100
-
         exit_price = None
         exit_reason = "timeout"
         exit_idx = min(i + 200, len(df) - 1)
-
         for j in range(i + 1, min(i + 201, len(df))):
             h = df["high"].iloc[j]
             lo = df["low"].iloc[j]
@@ -162,18 +147,14 @@ class ICTBacktester:
                     exit_reason = "take_profit"
                     exit_idx = j
                     break
-
         if exit_price is None:
             exit_price = df["close"].iloc[exit_idx]
-
         exit_fee = exit_price * size * cfg["taker_fee_pct"] / 100
         total_fees = entry_fee + exit_fee
-
         gross_pnl = (exit_price - act_entry) * size if direction == "long" else (act_entry - exit_price) * size
         net_pnl = gross_pnl - total_fees
         pnl_pct = net_pnl / capital * 100
         r_multiple = gross_pnl / risk_amt if risk_amt > 0 else 0
-
         return {
             "entry_time":    self.fmt_ts(df["timestamp"].iloc[i]),
             "exit_time":     self.fmt_ts(df["timestamp"].iloc[exit_idx]),
@@ -194,7 +175,6 @@ class ICTBacktester:
             "structure":     signal.get("structure", "unknown"),
             "sl_distance":   round(sl_dist, 2),
         }
-
     def run(self):
         cfg = self.cfg
         sh, sl_idx = self.detect_swing_highs_lows()
@@ -205,7 +185,6 @@ class ICTBacktester:
         active_fvgs = list(fvgs)
         daily_trades = {}
         daily_loss = {}
-
         for i in range(cfg["ob_lookback"] + 5, len(df)):
             if not self.in_session(df["timestamp"].iloc[i]):
                 continue
@@ -216,10 +195,8 @@ class ICTBacktester:
                 continue
             if daily_loss[day] <= -(cfg["max_daily_loss_pct"] / 100 * cfg["initial_capital"]):
                 continue
-
             price = df["close"].iloc[i]
             signal = None
-
             for fvg in active_fvgs:
                 if fvg["filled"] or fvg["index"] >= i:
                     continue
@@ -247,7 +224,6 @@ class ICTBacktester:
                             "structure": structure}
                         fvg["filled"] = True
                         break
-
             if signal:
                 trade = self.simulate_trade(signal, self.capital)
                 if trade:
@@ -258,9 +234,7 @@ class ICTBacktester:
                     daily_trades[day] += 1
                     if trade["net_pnl"] < 0:
                         daily_loss[day] += trade["net_pnl"]
-
         return self.trades
-
     def summary(self):
         if not self.trades:
             return {"error": "No trades executed"}
@@ -275,7 +249,6 @@ class ICTBacktester:
         trough = min(valley_after_peak) if valley_after_peak else final
         max_dd = (peak - trough) / peak * 100 if peak > 0 else 0
         profit_factor = abs(wins["gross_pnl"].sum() / loss["gross_pnl"].sum()) if len(loss) > 0 and loss["gross_pnl"].sum() != 0 else float("inf")
-
         return {
             "total_trades":      total,
             "winners":           len(wins),
@@ -289,5 +262,6 @@ class ICTBacktester:
             "avg_loss":          round(loss["net_pnl"].mean(), 2) if len(loss) > 0 else 0,
             "avg_r_multiple":    round(df_t["r_multiple"].mean(), 2),
             "profit_factor":     round(profit_factor, 2),
-            
-
+            "max_drawdown_pct": round(max_dd, 2),
+            "trades":           df_t.to_dict(orient="records") if len(df_t) > 0 else [],
+        }

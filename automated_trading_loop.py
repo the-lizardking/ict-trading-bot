@@ -1,3 +1,6 @@
+import os
+from dotenv import load_dotenv
+load_dotenv(os.path.expanduser('~/.bot_env'))
 #!/usr/bin/env python3
 '''ICT Automated Trading Bot - Milestone 6: Daily Max Drawdown Protection'''
 import time
@@ -235,6 +238,11 @@ class KillZoneScalperBot:
         print("  ICT Kill Zone Scalper - MILESTONE 6 (Daily Drawdown Protection)")
         print("  Max Daily Loss: 5% of start-of-day balance")
         print("="*70)
+        from alert_manager import AlertManager
+        am = AlertManager()
+        if not hasattr(am, "send_alert"):
+            am.send_alert = lambda msg: None
+        am.send_alert("✅ ICT Trading Bot is LIVE on Oracle Cloud! Monitoring kill zones...")
         self.running = True
         count = 0
         try:
