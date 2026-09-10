@@ -170,11 +170,17 @@ def requirement_seconds() -> float:
     return v if v > 0 else _DEFAULT_REQUIREMENT_S
 
 
-def record_pass(duration_ms: float) -> None:
+def record_pass(duration_ms: float, extra_fields: Optional[Dict[str, Any]] = None) -> None:
     """Record one COMPLETED exit-evaluation pass. Never raises.
 
     Called after the pass returns, deliberately — a pass that started and hung
     must NOT refresh liveness, which is the entire condition being detected.
+
+    ``extra_fields`` are stamped onto the durable per-pass soak row verbatim
+    (default: nothing, so the row is unchanged). It exists so a pass can record
+    WHY it took the time it did — today the per-pass IB circuit breaker's
+    verdict, without which a short reset-window pass cannot be told from a pass
+    that simply met a healthy queue.
 
     It also closes out the INTERVAL that just ended. The requirement is written
     about the gap between two evaluations, and that gap is `sleep + next pass`,
@@ -238,12 +244,17 @@ def record_pass(duration_ms: float) -> None:
         from src.runtime.exit_interval_soak import (
             build_exit_interval_record, record_exit_interval,
         )
+        # `extra_fields` rides through the builder's **fields. It defaults to
+        # None so every existing caller writes a byte-identical row; the builder
+        # drops None values, so an annotation that could not be gathered is
+        # ABSENT rather than fabricated as a zero.
         record_exit_interval(build_exit_interval_record(
             interval_ms=soak_interval_ms,
             pass_ms=duration_ms,
             requirement_s=requirement_seconds(),
             process_started_utc=snap_started,
             passes=snap_passes,
+            **(extra_fields or {}),
         ))
     except Exception:  # noqa: BLE001 — never raise into the exit loop
         return

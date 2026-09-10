@@ -324,6 +324,79 @@ def exit_loop_interval_seconds() -> float:
     return v if v > 0 else 30.0
 
 
+def _ib_breaker_report(fetcher) -> dict:
+    """What the per-pass IB breaker did, for the durable exit-interval soak row.
+
+    FOUR STATES, NEVER COLLAPSED — the point of the field is to make a fast pass
+    ATTRIBUTABLE, and three of the four look identical in `pass_ms` alone:
+
+      * ``no_ib_packages`` — the pass fetched nothing IB-routed, so the breaker
+        had nothing to act on. NOT the same as it having acted and skipped zero.
+      * ``armed`` with ``skipped: 0`` — it was live and the queue was healthy.
+        This is the ordinary case and it is the DENOMINATOR: without it, a run of
+        zeros cannot be told from the field never being written.
+      * ``armed`` with ``skipped: n`` — it acted; the pass is short BECAUSE of it.
+      * ``disabled`` — rolled back via ``EXIT_LOOP_IB_BREAKER_DISABLED``, so a
+        short pass says nothing about the breaker.
+
+    Returns ``{}`` when the fetcher carries no breaker state at all (a caller
+    that built its own fetcher, or a future refactor) — the field is then ABSENT
+    from the row, which is the honest fifth reading: *we did not look*. Never
+    raises: a soak annotation must not be able to fail a pass.
+    """
+    try:
+        state = getattr(fetcher, "ib_breaker", None)
+        if not isinstance(state, dict):
+            return {}
+        armed = state.get("armed")
+        if armed is None:
+            name = "no_ib_packages"
+        elif armed:
+            name = "armed"
+        else:
+            name = "disabled"
+        return {"ib_breaker": {
+            "state": name,
+            "tripped": bool(state.get("tripped")),
+            "skipped": int(state.get("skipped") or 0),
+        }}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _ib_queue_timeout_seconds() -> float:
+    """The pinned-thread queue wait, for the breaker's log lines ONLY.
+
+    Read from `ib_connector` so the number printed is the one actually enforced
+    rather than a second copy free to drift from it. Falls back to the module's
+    own documented default if the import fails — a log line must never raise
+    into a pass.
+    """
+    try:
+        from src.exchange.ib_connector import _IB_FETCH_QUEUE_TIMEOUT_S
+        return float(_IB_FETCH_QUEUE_TIMEOUT_S)
+    except Exception:  # noqa: BLE001
+        return 29.0
+
+
+def ib_breaker_armed() -> bool:
+    """Is the per-pass IB circuit breaker armed? (R2, Tier-2, 2026-09-10)
+
+    ARMED BY DEFAULT. ``EXIT_LOOP_IB_BREAKER_DISABLED`` truthy is the sanctioned
+    rollback -- every IB package pays its own queue timeout again, byte-for-byte
+    the pre-2026-09-10 behaviour. One env flip plus a restart, no redeploy, the
+    same shape as ``EXIT_LOOP_DECOUPLE_DISABLED``.
+
+    A default-OFF kill-switch over an ON capability, NOT a default-off
+    ``*_ENABLED`` gate in front of a required one -- the distinction the Prime
+    Directive turns on. Read at call time so the flip needs no code change, and
+    only an explicit truthy value disarms: anything else (a typo, an empty
+    string, an unset variable) leaves it armed, because a mistyped rollback must
+    not silently restore the behaviour the operator approved removing.
+    """
+    return not _truthy(os.environ.get("EXIT_LOOP_IB_BREAKER_DISABLED"))
+
+
 def _exit_loop(settings: dict) -> None:
     """Evaluate every open package's exit on our own cadence, forever.
 
@@ -346,14 +419,13 @@ def _exit_loop(settings: dict) -> None:
 
     while True:
         started = time.monotonic()
+        fetcher = _build_monitor_ohlcv_fetcher(settings)
         try:
-            run_exit_evaluation_tick(
-                ohlcv_fetcher=_build_monitor_ohlcv_fetcher(settings),
-            )
+            run_exit_evaluation_tick(ohlcv_fetcher=fetcher)
         except Exception:  # noqa: BLE001
             logger.exception("exit_loop: pass failed")
         elapsed_ms = (time.monotonic() - started) * 1000.0
-        record_pass(elapsed_ms)
+        record_pass(elapsed_ms, extra_fields=_ib_breaker_report(fetcher))
         write_state_file()
         slack = exit_loop_interval_seconds() - (elapsed_ms / 1000.0)
         if slack > 0:
@@ -438,6 +510,65 @@ def _build_monitor_ohlcv_fetcher(settings: dict):
     except Exception:  # noqa: BLE001
         _per_strategy_tf = {}
 
+    # --- The per-pass IB circuit breaker (R2, Tier-2, operator-approved
+    # DEC-20260910-EXIT-EVAL-60S-REMEDY, chosen `r2_only`, 2026-09-10T07:52Z) --
+    #
+    # WHAT IT DOES. Once ONE IB-routed fetch in THIS pass has come back with a
+    # pinned-thread queue timeout, the remaining IB-routed fetches in the SAME
+    # pass are skipped and their callers get `candles=None`.
+    #
+    # WHY IT CHANGES NOTHING ABOUT ANY OUTCOME. IB market data is serialised on
+    # ONE pinned worker (`_IB_FETCH_EXECUTOR`, max_workers=1), so while the
+    # queue is congested every later fetch in the pass waits its own
+    # `_IB_FETCH_QUEUE_TIMEOUT_S` (29.0s at the shipped default) and then
+    # returns None anyway. A skipped package receives EXACTLY the `candles=None`
+    # it would have received 29s later, and `order_monitor` already
+    # short-circuits on it. This bounds the COST of an outcome that is already
+    # determined; it does not decide anything.
+    #
+    # MEASURED, and this is the whole reason it exists
+    # (docs/claude/work/EXIT-EVAL-60S-ROOTCAUSE-2026-09-10.md, complete census
+    # of all 1218 within-process breaching intervals read 2026-09-10T06:13Z from
+    # /api/bot/exit-interval/soak): every within-process 60s breach is a slow
+    # PASS (1218/1218 have pass_ms > 30s), and the live residual is 10 of 14
+    # post-fix breaches inside the 04:00-05:00Z IBKR reset window, where a pass
+    # costs n_IB x 29s and crosses 60s at THREE packages. INFERRED from that
+    # arithmetic: pass cost in the window falls from n x 29s to ~35s.
+    #
+    # WHY NOT A SHORTER TIMEOUT. BL-20260816's own criterion 2:
+    # "do not optimise the interval into a MONITOR BLIND." Lowering
+    # `IB_FETCH_QUEUE_TIMEOUT_S` would start discarding genuinely queued healthy
+    # fetches. Neither timeout is touched here.
+    #
+    # THE COST, STATED RATHER THAN HIDDEN. During a TRANSIENT single-fetch queue
+    # timeout that is not congestion, the breaker skips later IB packages that
+    # might have succeeded; they get `candles=None` for one pass and are retried
+    # on the next, ~30s later. That is a real, bounded degradation and is why
+    # this is Tier-2 rather than a session's own call.
+    #
+    # SCOPE. The state lives in THIS closure, and `_build_monitor_ohlcv_fetcher`
+    # is called fresh for each pass, so "per pass" is structural rather than
+    # something a caller must remember to reset.
+    # `armed` starts None and is set on the first IB-ROUTED fetch, so it stays
+    # None when the pass had no IB package at all. Those are different facts and
+    # the soak row below keeps them apart: "armed and nothing to skip" is not
+    # "there was nothing IB-routed to skip in the first place", and neither is
+    # "the operator has rolled it back".
+    _breaker: dict = {"tripped": False, "skipped": 0, "armed": None}
+
+    def _is_ib_routed(client) -> bool:
+        """True when *client* is the IB market-data connector.
+
+        Import guarded: if `src.exchange.ib_connector` cannot be imported then
+        no IB connector can have been constructed either, so the honest answer
+        is False and the breaker is simply inert.
+        """
+        try:
+            from src.exchange.ib_connector import IBMarketData
+        except Exception:  # noqa: BLE001
+            return False
+        return isinstance(client, IBMarketData)
+
     def _fetch(symbol, timeframe, strategy_name=None):
         if not symbol:
             return None
@@ -448,13 +579,68 @@ def _build_monitor_ohlcv_fetcher(settings: dict):
         client = _connector_for(symbol)
         if client is None:
             return None
-        return fetch_candles(
+
+        # `ib_routed` is resolved whether or not the breaker is armed, and the
+        # flag below is consumed either way, so a DISARMED window cannot leave a
+        # stale timeout flag behind for a later re-arm to trip on. `armed` gates
+        # only what we DO with it.
+        armed = ib_breaker_armed()
+        ib_routed = _is_ib_routed(client)
+        if ib_routed:
+            _breaker["armed"] = armed
+
+        if armed and ib_routed and _breaker["tripped"]:
+            _breaker["skipped"] += 1
+            logger.warning(
+                "monitor: IB breaker OPEN — skipping %s/%s this pass "
+                "(the pinned IB queue already timed out once; this package "
+                "gets the candles=None it would have got in %.1fs). "
+                "Retried next pass. Skipped so far this pass: %d.",
+                symbol, timeframe, _ib_queue_timeout_seconds(),
+                _breaker["skipped"],
+            )
+            return None
+
+        candles = fetch_candles(
             symbol, timeframe,
             settings=settings,
             exchange_client=client,
             limit=200,
         )
 
+        if ib_routed:
+            # Read-and-clear. This asks "did MY fetch just hit the pinned-thread
+            # QUEUE timeout" — a distinct signal, not "did it return None". A
+            # gateway outage, an unknown symbol and a venue-side
+            # reqHistoricalData timeout all return None too, and none of them is
+            # queue congestion; tripping on those would be a widening of what
+            # was approved.
+            try:
+                from src.exchange.ib_connector import consume_queue_timeout
+            except Exception:  # noqa: BLE001
+                return candles
+            timed_out = consume_queue_timeout()
+            if timed_out and armed:
+                _breaker["tripped"] = True
+                logger.warning(
+                    "monitor: IB breaker TRIPPED on %s/%s — the pinned IB "
+                    "thread did not answer within %.1fs, so the remaining "
+                    "IB-routed packages in THIS pass are skipped rather than "
+                    "each paying the same wait. Rollback: "
+                    "EXIT_LOOP_IB_BREAKER_DISABLED.",
+                    symbol, timeframe, _ib_queue_timeout_seconds(),
+                )
+
+        return candles
+
+    # The pass reads this back to stamp what the breaker DID onto the durable
+    # per-pass soak row. Without it a fast reset-window pass is unattributable:
+    # "the breaker skipped two packages" and "the queue simply was not congested
+    # this pass" produce the same `pass_ms`, and reporting the first from the
+    # second is the unprovenanced-diagnostic defect this repo has a guard for.
+    # The two WARNING lines above are NOT a substitute — they reach the systemd
+    # journal only, whose retention on this VM was measured at ~30 minutes.
+    _fetch.ib_breaker = _breaker  # type: ignore[attr-defined]
     return _fetch
 
 

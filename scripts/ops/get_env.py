@@ -225,6 +225,17 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # but nothing could read the switch back to say WHY, and the decoupled exit
     # loop is the one condition the liveness watchdog no longer covers.
     "EXIT_LOOP_DECOUPLE_DISABLED",
+    # Added 2026-09-10 with the key itself (MI-240), deliberately in the SAME
+    # change rather than after the fact — CANDLE_CACHE_TTL_MAX_S's note below
+    # records what the other order costs. The per-pass IB circuit breaker (R2,
+    # Tier-2, DEC-20260910-EXIT-EVAL-60S-REMEDY) is ARMED BY DEFAULT, so an
+    # UNSET value is the armed state and there is no `set-env` to read back.
+    # That is exactly why it must be readable: the only way to establish the
+    # breaker is armed on the running trader is to read this key off
+    # /proc/<MainPID>/environ and see it absent. Without it, "armed" would be an
+    # inference from the code rather than an observation of the fleet — and the
+    # .env says only what the NEXT restart picks up.
+    "EXIT_LOOP_IB_BREAKER_DISABLED",
     # --- Cadence / budget knobs (an unparseable one changes behaviour) ---
     "TICK_INTERVAL_SECONDS",
     "HEARTBEAT_INTERVAL_SECONDS",

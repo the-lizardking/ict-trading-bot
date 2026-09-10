@@ -131,6 +131,54 @@ except (TypeError, ValueError):
     _IB_USAGE_LOCK_WAIT_S = _IB_FETCH_TIMEOUT_S * 3.0
 
 
+# --- The per-pass IB circuit breaker's ONE signal (R2, 2026-09-10) ----------
+#
+# WHY A THREAD-LOCAL AND NOT A COUNTER. The exit-evaluation pass needs to know
+# that ITS OWN fetch hit the pinned-thread queue timeout -- not that some fetch
+# somewhere in the process did. A module counter would also be incremented by
+# the tick thread, so a pass whose own IB fetch SUCCEEDED could still see a
+# delta and trip. That is a widening of the operator-approved change: R2 is
+# "once ONE IB-routed fetch IN THAT PASS has returned a queue timeout".
+#
+# The flag is set on the CALLING thread because that is where it happens:
+# `future.result(timeout=...)` raises _FutureTimeout in the caller, never on
+# the pinned worker. So the thread that observes the timeout is exactly the
+# thread that asked, which is exactly the thread running the pass.
+#
+# THREE STATES, NEVER COLLAPSED, and this is why the reader is a distinct
+# signal rather than "get_ohlcv returned None":
+#   * queue timeout      -> flag set, get_ohlcv returns None  (the breaker's trigger)
+#   * any OTHER failure  -> flag clear, get_ohlcv returns None (gateway down, an
+#                           unknown symbol, a venue-side reqHistoricalData timeout)
+#   * success            -> flag clear, DataFrame returned
+# A breaker keyed on `None` alone would trip on all three, and the second is not
+# congestion -- it is a fault whose retry cost is not 29s and whose remedy is
+# different. Collapsing them is the class docs/CLAUDE-RULES-CANONICAL.md calls
+# out under "Collapsed states".
+_QUEUE_TIMEOUT_TLS = threading.local()
+
+
+def _mark_queue_timeout() -> None:
+    """Record that THIS thread just observed a pinned-thread queue timeout."""
+    _QUEUE_TIMEOUT_TLS.hit = True
+
+
+def consume_queue_timeout() -> bool:
+    """Pop-and-clear this thread's pinned-thread queue-timeout flag.
+
+    Returns True exactly once per observed timeout, on the thread that observed
+    it. Read-and-clear rather than read-only so a flag set in pass N can never
+    trip the breaker in pass N+1 -- a stale trip would skip IB packages on a
+    healthy pass, which is a real degradation and not what was approved.
+
+    Reading it is optional: nothing in ``get_ohlcv``'s contract depends on the
+    flag being consumed, so a caller that never asks is byte-for-byte unaffected.
+    """
+    hit = bool(getattr(_QUEUE_TIMEOUT_TLS, "hit", False))
+    _QUEUE_TIMEOUT_TLS.hit = False
+    return hit
+
+
 def _on_ib_fetch_thread() -> bool:
     """True when already running ON the pinned thread.
 
@@ -275,6 +323,12 @@ class IBMarketData:
             # Degrade exactly like a venue timeout: the caller already handles
             # None. Distinct message so a queue starvation is never read as a
             # gateway fault — they need different fixes.
+            #
+            # Also raise the thread-local flag so a caller that wants to bound
+            # the COST of a congested queue can see WHICH failure this was. The
+            # return value is unchanged (None), so a caller that never reads the
+            # flag behaves exactly as before.
+            _mark_queue_timeout()
             logger.warning(
                 "IBMarketData.get_ohlcv timed out waiting for the pinned IB "
                 "thread (symbol=%s timeframe=%s, waited %.1fs) — another IB "

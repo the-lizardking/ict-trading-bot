@@ -60,7 +60,7 @@ def test_a_raising_pass_does_not_kill_the_loop(monkeypatch):
     import src.runtime.exit_loop_health as h
     import src.runtime.order_monitor as om
     monkeypatch.setattr(om, "run_exit_evaluation_tick", boom)
-    monkeypatch.setattr(h, "record_pass", lambda ms: recorded.append(ms))
+    monkeypatch.setattr(h, "record_pass", lambda ms, **_: recorded.append(ms))
     monkeypatch.setattr(h, "write_state_file", lambda *a, **k: None)
     monkeypatch.setattr(main, "_build_monitor_ohlcv_fetcher", lambda s: None)
     monkeypatch.setattr(main.time, "sleep", lambda s: None)
@@ -86,7 +86,7 @@ def test_record_pass_is_called_after_the_pass_returns(monkeypatch):
         raise KeyboardInterrupt        # stop after one iteration
 
     monkeypatch.setattr(om, "run_exit_evaluation_tick", slow_pass)
-    monkeypatch.setattr(h, "record_pass", lambda ms: order.append("record"))
+    monkeypatch.setattr(h, "record_pass", lambda ms, **_: order.append("record"))
     monkeypatch.setattr(h, "write_state_file", lambda *a, **k: None)
     monkeypatch.setattr(main, "_build_monitor_ohlcv_fetcher", lambda s: None)
 
@@ -115,7 +115,7 @@ def test_an_overrunning_pass_does_not_sleep(monkeypatch):
         monkeypatch.setattr(main.time, "monotonic", lambda: t0 + 60.0)
 
     monkeypatch.setattr(om, "run_exit_evaluation_tick", long_pass)
-    monkeypatch.setattr(h, "record_pass", lambda ms: None)
+    monkeypatch.setattr(h, "record_pass", lambda ms, **_: None)
     monkeypatch.setattr(h, "write_state_file", lambda *a, **k: None)
     monkeypatch.setattr(main, "_build_monitor_ohlcv_fetcher", lambda s: None)
     monkeypatch.setattr(main.time, "sleep", lambda s: slept.append(s))

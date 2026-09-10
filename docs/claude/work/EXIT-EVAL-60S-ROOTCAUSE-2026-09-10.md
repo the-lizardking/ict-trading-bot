@@ -308,6 +308,28 @@ and this session's object is investigate-and-propose.
 
 ## 6. The remedies — PROPOSED, NOT APPLIED. Tier-2, operator's call.
 
+> ⚠️ **ANSWERED 2026-09-10T07:52Z, AND THIS SECTION'S HEADING IS NOW HALF STALE — do not
+> re-quote "PROPOSED, NOT APPLIED" as covering both remedies.** The operator chose
+> **`r2_only`** on `DEC-20260910-EXIT-EVAL-60S-REMEDY` from the four-option popup.
+>
+> * **R2 is APPROVED AND BUILT** — MI-240, PR #11738. Read that PR, not this section,
+>   for what actually shipped; this text is the PROPOSAL and the two can drift.
+> * **R1 is DECLINED.** It was offered and not chosen. It must not be armed, must not
+>   ride along on another change, and **`both` is not a safer reading of `r2_only`.**
+> * **The fourth option — whether the restart boundary is in scope for the 60 s promise
+>   at all — was NOT CHOSEN, so §7's question is only PARTLY answered.** It is open, not
+>   settled by implication. Putting it back to the operator would be a NEW decision
+>   request.
+>
+> ⚠️ **AND R2 BEING BUILT IS NOT THE 60 s PROMISE BEING KEPT.** It targets the
+> within-process reset-window residual of §2.3 only. The restart-boundary population of
+> §3 — 444 of 444 measured boundaries, 77 breaching (17.3 %), max 210,409.2 ms — is
+> **untouched** by it. Merged is not deployed and deployed is not observed:
+> `OI-20260910-IB-PER-PASS-BREAKER-ARMED-AND-HAS-SKIPPED-NOTHING` carries the fleet half.
+>
+> *The section below is preserved verbatim as the record of what was put to the operator.*
+
+
 Each is exact, targets a term measured above, and carries a **one-env-flip
 rollback with no redeploy** in the sanctioned `EXIT_LOOP_DECOUPLE_DISABLED`
 shape (a default-OFF kill-switch over an ON capability — **not** a default-off
@@ -385,6 +407,11 @@ is Tier-2 and not a session's own call.
 ---
 
 ## 7. Open question for the operator
+
+> ⚠️ **PARTLY ANSWERED — see the note at the head of §6.** *"Which, if any, of R1 / R2 to
+> arm"* was answered `r2_only` at 2026-09-10T07:52Z. *"Whether the restart boundary is in
+> scope for the 60 s promise at all"* was **NOT** answered and remains open.
+
 
 **Which, if any, of R1 / R2 to arm — and whether the restart boundary is in
 scope for the 60 s promise at all.** R1 and R2 are independent and target
