@@ -5,10 +5,10 @@
     "active_sessions": "[ { session_id, branch, intent, started_at, updated_at } ] — one entry per live session; prune your own on exit. Stale entries (>24h, no matching open PR/branch) may be pruned by any session."
   },
   "merge_slot": {
-    "held_by": "claude session_01Ww2pZVK5VUqV8xFFtTs9B1 · PR #11647",
-    "branch": "claude/mi-exit-eval-60s-rootcause",
-    "claimed_at": "2026-09-10T06:40:02Z",
-    "purpose": "Tier-1 docs-only: exit-eval 60s root cause + DEC-20260910-EXIT-EVAL-60S-REMEDY. Taken from session_01HrmZ1RRNM4UnEUaFdrPEjj / claude/mgr-hb-20260910T0610, whose branch is ALREADY MERGED to main — a completed claim, not a live one."
+    "held_by": "claude session_017UnyG4ArXmXKpB8rmEGv1j · PR pending (MI-139 close-out)",
+    "branch": "claude/mi139-observe-deployed-20260910",
+    "claimed_at": "2026-09-10T07:05:00Z",
+    "purpose": "Tier-1 registers only: record the DUE fleet observation on OI-20260906-BYBIT-CLOSE-QTY-SNAP-MERGED-BUT-NEVER-OBSERVED-ON-THE-FLEET (clause 1 DEPLOYED now satisfied, clauses 2-3 not) + file BL-20260910-DIAG-JOURNALCTL-SILENTLY-ACCEPTS-AN-UNKNOWN-QUERY-PARAM-SO-A-FILTER-READS-AS-A-MATCH-COUNT. No src/, no config/, no order path. TAKEN FROM session_01Ww2pZVK5VUqV8xFFtTs9B1 / claude/mi-exit-eval-60s-rootcause, whose PR #11647 MERGED at 2026-09-10T06:43:33Z — a COMPLETED claim, not a live one. Verified against GitHub (state closed, merged true), not inferred from the claim's age; this is the same disposition that claim itself recorded when it took the slot from its own predecessor."
   },
   "active_sessions": [
     {

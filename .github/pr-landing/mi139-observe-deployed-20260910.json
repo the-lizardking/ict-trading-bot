@@ -1,0 +1,5 @@
+{
+  "tier": 1,
+  "landing": "self",
+  "why": "Two register files only. (1) docs/claude/OPEN-ITEMS.json — one row's verified_at and observation, spliced as text because that file is NOT byte-reproducible (it mixes a literal and an escaped em-dash) and a json round-trip reformats ~1500 lines; verified in code that exactly one row changed. (2) docs/claude/health-review-backlog.json — one appended row via backlog_append.py, 17 insertions and 0 deletions. No src/, no config/, no tests/, no workflows, no order path. It RECORDS an observation of the live fleet; it changes nothing on it."
+}

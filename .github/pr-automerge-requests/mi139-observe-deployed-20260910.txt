@@ -1,0 +1,19 @@
+MI-139 fleet observation — registers only, Tier-1.
+
+OPEN-ITEMS OI-20260906-BYBIT-CLOSE-QTY-SNAP-MERGED-BUT-NEVER-OBSERVED-ON-THE-FLEET
+was due (check_every_days 4, last verified 2026-09-06) and is re-observed:
+clause (1) DEPLOYED is now SATISFIED, clauses (2) and (3) are not.
+
+The fix is in the RUNNING process, established by ancestry rather than string
+equality: git_sha d597d2451, and `git merge-base --is-ancestor 9604b8a5
+d597d2451` succeeds; confirmed by reading snap_qty_str at that sha.
+
+Clause (2) is unmet and the read is too narrow to be evidence either way:
+2000 journal lines over an 8.5-minute window contained ZERO close attempts,
+with a positive control (order_monitor, 536 lines) proving the probe works.
+
+Also files BL-20260910-DIAG-JOURNALCTL-SILENTLY-ACCEPTS-AN-UNKNOWN-QUERY-PARAM-SO-A-FILTER-READS-AS-A-MATCH-COUNT
+— /api/diag/journalctl declares only unit/lines/since/until, so ?grep= is
+dropped silently and three different grep terms returned identical payloads.
+
+No src/, no config/, no order path.

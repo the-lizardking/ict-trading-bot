@@ -35468,6 +35468,23 @@
         "BL-20260816-TICK-COST-MAX-RESETS-EVERY-DEPLOY",
         "BL-20260816-EXIT-INTERVAL-SOAK-SUMMARY-HAS-NO-READ-SURFACE"
       ]
+    },
+    {
+      "id": "BL-20260910-DIAG-JOURNALCTL-SILENTLY-ACCEPTS-AN-UNKNOWN-QUERY-PARAM-SO-A-FILTER-READS-AS-A-MATCH-COUNT",
+      "opened": "2026-09-10",
+      "severity": "medium",
+      "tier": 1,
+      "status": "open",
+      "area": "observability",
+      "title": "/api/diag/journalctl silently ignores any query param it does not declare, so `?grep=X` returns the plain tail and a session reads N lines as N matches",
+      "detail": "MEASURED 2026-09-10T06:57Z. `get_journalctl` (src/web/api/routers/diag.py) declares exactly four params — unit, lines, since, until. FastAPI drops unknown query params silently, so `/api/diag/journalctl?unit=ict-trader-live.service&lines=1500&grep=<anything>` returns the ordinary 1500-line tail with NO filtering and NO error. ⚠️ THE FAILURE IS THAT IT LOOKS LIKE A SUCCESS. Three different queries — grep=qty_state, grep=snap_artifact, grep=Qty%20invalid — returned BYTE-IDENTICAL 1500-line payloads. A session checking whether a code path has fired reads '1500 matched lines' and concludes the path is firing constantly; the same probe 'confirms' any term at all, including one that appears nowhere in the tree. That is the UNPROVENANCED DIAGNOSTIC OUTPUT class this repo already names (CLAUDE.md § 'Diagnostic provenance', sub-class C — an unasserted denominator read as a clean answer), with a server-side cause rather than a script-side one, which is why check_diagnostic_provenance.py cannot see it. ⚠️ THE ASYMMETRY IS THE POINT AND IT IS ALREADY HALF-SOLVED IN THIS SAME FUNCTION: `since`/`until` are validated against _ISO_TIMESTAMP_RE and a malformed value is REJECTED with HTTP 400 and a typed body naming the param. So the route is strict about params it knows and silent about params it does not. The strictness was added because a bad timestamp would reach a subprocess argv; the silence was never considered because an unknown param reaches nothing — but it reaches the READER's conclusion. It was caught only because the three payloads were compared to each other. A session running ONE grep= query has no signal at all that it was ignored.",
+      "evidence": "src/web/api/routers/diag.py::get_journalctl signature — (request, unit, lines, since, until); no `grep`. Live: three grep= queries against ict-trader-live.service returned identical 1500-line payloads at 2026-09-10T06:57Z. Client-side filtering of the same 2000-line tail (window 06:49:09Z→06:57:42Z) gives the real answer: qty_state 0, snap_artifact 0, close_open_position 0, 'Qty invalid' 0, against a POSITIVE CONTROL of 'order_monitor' 536 — so the zeros are real and the 1500s were not.",
+      "resolution_criteria": "An unknown query param on the diag routes is REJECTED rather than ignored — e.g. a 400 naming the param, in the shape `since`/`until` already use, or a declared `grep`/`match` param that actually filters. ⚠️ NOT sufficient: documenting that grep is unsupported. The trap is that the caller gets a plausible 200 with a large payload; a doc nobody reads mid-probe does not change what the probe returns, and this repo has already paid for 'a reminder is not a mechanism'. ⚠️ VERIFY WITH A NEGATIVE CONTROL: a query carrying a nonsense param must not return the same bytes as the same query without it. Asserting that equality is the whole test, and it is what caught this.",
+      "refs": [
+        "src/web/api/routers/diag.py",
+        "OI-20260906-BYBIT-CLOSE-QTY-SNAP-MERGED-BUT-NEVER-OBSERVED-ON-THE-FLEET",
+        "MI-139"
+      ]
     }
   ]
 }
